@@ -28,7 +28,10 @@ from typing import (
 from .class_validators import ValidatorGroup, extract_root_validators, extract_validators, inherit_validators
 from .error_wrappers import ErrorWrapper, ValidationError
 from .errors import ConfigError, DictError, ExtraError, MissingError
-from .fields import MAPPING_LIKE_SHAPES, ModelField, ModelPrivateAttr, PrivateAttr, Undefined
+from .fields import (
+    MAPPING_LIKE_SHAPES, ModelField, ModelPrivateAttr, PrivateAttr,
+    Undefined, SHAPE_SET, SHAPE_LIST, SHAPE_SINGLETON
+)
 from .json import custom_pydantic_encoder, pydantic_encoder
 from .parse import Protocol, load_file, load_str_bytes
 from .schema import default_ref_template, model_schema
@@ -631,14 +634,66 @@ class BaseModel(Representation, metaclass=ModelMetaclass):
         return cls.parse_obj(obj)
 
     @classmethod
-    def from_orm(cls: Type['Model'], obj: Any) -> 'Model':
+    def _field_handler(
+            cls,
+            field: 'ModelField',
+            value: Any,
+    ):
+        real_value = value
+        if field.shape == SHAPE_LIST:
+            real_value = []
+            for val in value:
+                if field.sub_fields:
+                    for sub_field in field.sub_fields:
+                        val = cls._field_handler(sub_field, val)
+                else:
+                    val = cls._field_handler(field, val)
+                real_value.append(val)
+
+        elif field.shape == SHAPE_SINGLETON:
+            # Union types are singleton but contain sub_fields
+            if field.sub_fields:
+                for sub_field in field.sub_fields:
+                    real_value = cls._field_handler(sub_field, value)
+            else:
+                if lenient_issubclass(field.type_, (BaseModel, )):
+                    real_value = field.type_.from_orm(
+                        value, skip_validation=True
+                    )
+
+        return real_value
+
+
+    @classmethod
+    def from_orm(
+        cls: Type['Model'], obj: Any, skip_validation: bool = False
+    ) -> 'Model':
         if not cls.__config__.orm_mode:
             raise ConfigError('You must have the config attribute orm_mode=True to use from_orm')
         obj = {ROOT_KEY: obj} if cls.__custom_root_type__ else cls._decompose_class(obj)
         m = cls.__new__(cls)
-        values, fields_set, validation_error = validate_model(cls, obj)
-        if validation_error:
-            raise validation_error
+        if not skip_validation:
+            values, fields_set, validation_error = validate_model(cls, obj)
+            if validation_error:
+                raise validation_error
+        else:
+            values: Dict[str, Any] = {}
+            fields_set: SetStr = set()
+            for name, field in cls.__fields__.items():
+                # trying to resolve the value
+                value = obj.get(field.alias, _missing)
+                if value is _missing \
+                        and cls.__config__.allow_population_by_field_name \
+                        and field.alt_alias:
+                    value = obj.get(field.name, _missing)
+                # if the value is still _missing, then get the default_value
+                if value is _missing:
+                    value = field.get_default()
+                else:
+                    fields_set.add(name)
+
+                values[name] = cls._field_handler(field, value)
+
         object_setattr(m, '__dict__', values)
         object_setattr(m, '__fields_set__', fields_set)
         m._init_private_attributes()

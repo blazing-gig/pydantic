@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union, Optional
 
 import pytest
 
@@ -94,38 +94,65 @@ def test_orm_mode():
             self.name = name
             self.species = species
 
+        def __hash__(self):
+            return id(self)
+
     class PersonCls:
-        def __init__(self, *, name: str, age: float = None, pets: List[PetCls]):
+        def __init__(
+                self, *, name: str, age: float = None,
+                pets: Union[PetCls, str],
+        ):
             self.name = name
             self.age = age
             self.pets = pets
 
+
     class Pet(BaseModel):
-        name: str
-        species: str
+        name: Optional[str]
+        species: Optional[str]
+
+        def __hash__(self):
+            return id(self)
 
         class Config:
             orm_mode = True
 
     class Person(BaseModel):
-        name: str
-        age: float = None
-        pets: List[Pet]
+        name: Optional[str]
+        age: Optional[float] = None
+        pets: Union[Pet, str]
 
         class Config:
             orm_mode = True
 
-    bones = PetCls(name='Bones', species='dog')
-    orion = PetCls(name='Orion', species='cat')
-    anna = PersonCls(name='Anna', age=20, pets=[bones, orion])
+    # bones = PetCls(name='Bones', species='dog')
+    # orion = PetCls(name='Orion', species='cat')
+    anna = PersonCls(
+        name='Anna', age=20, pets="hello",
+    )
 
     anna_model = Person.from_orm(anna)
-
+    # print(anna_model.dict())
+    # print(anna_model.__fields__['pets'].sub_fields[0].sub_fields)
     assert anna_model.dict() == {
         'name': 'Anna',
-        'pets': [{'name': 'Bones', 'species': 'dog'}, {'name': 'Orion', 'species': 'cat'}],
+        'pets': "hello",
         'age': 20.0,
+        "lala": {'name': 'gili', 'species': 'puppy'}
     }
+
+def test_blah():
+    from pydantic import BaseModel
+
+    class A(BaseModel):
+        a: Optional[str]
+
+    class B(BaseModel):
+        b: Union[A, Dict[str, str]]
+
+    n = B(b={"sdf": "sss"})
+    print(n.dict())
+
 
 
 def test_not_orm_mode():
